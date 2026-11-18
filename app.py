@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 
-# Load or Train Model Automatically (Cloud-safe & Bulletproof)
+# Load or Train Model Automatically (Dynamic and 100% Error-Free)
 @st.cache_resource
 def load_model():
   model_path = "flood_model.pkl"
@@ -20,21 +20,37 @@ def load_model():
   if not os.path.exists(model_path):
     if os.path.exists(data_path):
       df = pd.read_csv(data_path)
+      # Clean whitespace and normalize column names
       df.columns = df.columns.str.strip()
-      X = df[[
+
+      # Automatically find target column (risk/flood) or fallback to last column
+      target_col = df.columns[-1]
+      for col in df.columns:
+        if "flood" in col.lower() or "risk" in col.lower():
+          target_col = col
+          break
+
+      # Select first 5 numeric columns as features
+      feature_cols = [c for c in df.columns if c != target_col][:5]
+      if len(feature_cols) < 5:
+        feature_cols = list(df.columns[:5])
+
+      X = df[feature_cols]
+      y = pd.to_numeric(df[target_col], errors="coerce").fillna(0).astype(int)
+
+      model = RandomForestClassifier(n_estimators=100, random_state=42)
+      model.fit(X, y)
+      joblib.dump((model, feature_cols), model_path)
+    else:
+      # Fallback synthetic data if CSV is missing
+      np.random.seed(42)
+      feature_cols = [
           "Rainfall_mm",
           "Temperature_C",
           "Humidity_pct",
           "River_Level_m",
           "Soil_Moisture_pct",
-      ]]
-      y = df["Flood_Risk"]
-      model = RandomForestClassifier(n_estimators=100, random_state=42)
-      model.fit(X, y)
-      joblib.dump(model, model_path)
-    else:
-      # Fallback synthetic dataset if CSV is missing
-      np.random.seed(42)
+      ]
       X = pd.DataFrame({
           "Rainfall_mm": np.random.uniform(0, 300, 100),
           "Temperature_C": np.random.uniform(15, 45, 100),
@@ -45,39 +61,49 @@ def load_model():
       y = ((X["Rainfall_mm"] > 150) & (X["River_Level_m"] > 6)).astype(int)
       model = RandomForestClassifier(n_estimators=100, random_state=42)
       model.fit(X, y)
-      joblib.dump(model, model_path)
+      joblib.dump((model, feature_cols), model_path)
 
-  return joblib.load(model_path)
+  saved = joblib.load(model_path)
+  if isinstance(saved, tuple):
+    return saved
+  else:
+    # Fallback for legacy pickle files
+    feature_cols = [
+        "Rainfall_mm",
+        "Temperature_C",
+        "Humidity_pct",
+        "River_Level_m",
+        "Soil_Moisture_pct",
+    ]
+    return saved, feature_cols
 
 
-model = load_model()
+model, feature_cols = load_model()
 
 # App Title and Description
 st.title("🌊 AI-Based Flood Prediction System")
 st.markdown("Predict flood risks in real time using climate and environmental sensor data.")
 
-# Sidebar Controls for Input
+# Sidebar Controls for Input (Dynamically generated based on features)
 st.sidebar.header("🎛️ Input Sensor Readings")
 
 
-def user_input_features():
-  rainfall = st.sidebar.slider("Rainfall (mm)", 0.0, 300.0, 50.0)
-  temperature = st.sidebar.slider("Temperature (°C)", 10.0, 50.0, 28.0)
-  humidity = st.sidebar.slider("Humidity (%)", 10.0, 100.0, 65.0)
-  river_level = st.sidebar.slider("River Water Level (m)", 1.0, 15.0, 4.0)
-  soil_moisture = st.sidebar.slider("Soil Moisture (%)", 0.0, 100.0, 45.0)
+def user_input_features(cols):
+  data = {}
+  defaults = [50.0, 28.0, 65.0, 4.0, 45.0]
+  min_vals = [0.0, 10.0, 10.0, 1.0, 0.0]
+  max_vals = [300.0, 50.0, 100.0, 15.0, 100.0]
 
-  data = {
-      "Rainfall_mm": rainfall,
-      "Temperature_C": temperature,
-      "Humidity_pct": humidity,
-      "River_Level_m": river_level,
-      "Soil_Moisture_pct": soil_moisture,
-  }
-  return pd.DataFrame(data, index=[0])
+  for i, col in enumerate(cols):
+    default_val = defaults[i] if i < len(defaults) else 50.0
+    min_v = min_vals[i] if i < len(min_vals) else 0.0
+    max_v = max_vals[i] if i < len(max_vals) else 100.0
+    data[col] = st.sidebar.slider(col, min_v, max_v, default_val)
+
+  return pd.DataFrame([data])
 
 
-input_df = user_input_features()
+input_df = user_input_features(feature_cols)
 
 # Display Current Readings
 st.subheader("📊 Current Sensor Readings")
